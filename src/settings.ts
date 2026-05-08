@@ -28,9 +28,13 @@ class SettingsTab {
       <div class="settings-section">
         <h3>FFmpeg 路径</h3>
         <div class="setting-row">
-          <input type="text" id="ffmpeg-path" placeholder="自动检测 PATH 中的 FFmpeg..." />
-          <button class="btn btn-secondary btn-sm" id="btn-browse-ffmpeg">浏览</button>
-          <button class="btn btn-secondary btn-sm" id="btn-detect-encoders">检测编码器</button>
+          <input type="text" id="ffmpeg-path" placeholder="留空则自动从系统 PATH 检测..." />
+          <button class="btn btn-secondary btn-sm" id="btn-browse-ffmpeg">浏览...</button>
+        </div>
+        <div class="setting-row" style="margin-bottom:0;">
+          <label></label>
+          <span id="ffmpeg-status" style="font-size:12px;color:var(--text-secondary);">检测中...</span>
+          <button class="btn btn-secondary btn-sm" id="btn-detect-encoders">检测可用编码器</button>
         </div>
       </div>
 
@@ -71,6 +75,9 @@ class SettingsTab {
     const ffmpegPath = document.getElementById("ffmpeg-path") as HTMLInputElement;
     ffmpegPath.value = this.settings.ffmpeg_path ?? "";
 
+    // Auto-detect ffmpeg status on load
+    this.updateFfmpegStatus();
+
     const maxConcurrent = document.getElementById("max-concurrent") as HTMLInputElement;
     maxConcurrent.value = String(this.settings.max_concurrent);
     document.getElementById("concurrent-val")!.textContent = String(this.settings.max_concurrent);
@@ -88,14 +95,32 @@ class SettingsTab {
     });
 
     document.getElementById("btn-browse-ffmpeg")!.addEventListener("click", async () => {
-      const selected = await open({ multiple: false });
+      const selected = await open({ multiple: false, filters: [{ name: "可执行文件", extensions: ["exe", "bat", "cmd"] }] });
       if (selected) {
         ffmpegPath.value = selected as string;
+        this.updateFfmpegStatus();
       }
     });
 
     document.getElementById("btn-detect-encoders")!.addEventListener("click", () => this.detectEncoders());
     document.getElementById("btn-save-settings")!.addEventListener("click", () => this.save());
+  }
+
+  static async updateFfmpegStatus(): Promise<void> {
+    const statusEl = document.getElementById("ffmpeg-status");
+    if (!statusEl) return;
+    const ffmpegPath = (document.getElementById("ffmpeg-path") as HTMLInputElement).value || null;
+    try {
+      const encoders = await invoke<EncoderInfo[]>("detect_encoders", { ffmpegPath });
+      if (encoders.length > 0) {
+        const path = ffmpegPath ?? "系统 PATH";
+        statusEl.innerHTML = `<span style="color:var(--success);">✓ FFmpeg 已检测到</span> <span style="color:var(--text-secondary);font-size:11px;">(${path})</span>`;
+      } else {
+        statusEl.innerHTML = `<span style="color:var(--error);">✗ 未检测到可用编码器</span>`;
+      }
+    } catch (e) {
+      statusEl.innerHTML = `<span style="color:var(--error);">✗ FFmpeg 未找到 (${e})</span>`;
+    }
   }
 
   static async detectEncoders(): Promise<void> {

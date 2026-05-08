@@ -47,6 +47,7 @@ class ScanQueueTab {
   static rules: EncodeRule[] = [];
   static tasks: Map<string, EncodeTask> = new Map();
   static encoding = false;
+  static scanning = false;
 
   static render(): string {
     return `
@@ -54,6 +55,8 @@ class ScanQueueTab {
         <input type="text" id="folder-path" placeholder="选择视频文件夹..." readonly />
         <button class="btn btn-primary" id="btn-select-folder">选择文件夹</button>
         <button class="btn btn-secondary" id="btn-scan" disabled>扫描</button>
+        <button class="btn btn-danger btn-sm" id="btn-stop-scan" style="display:none;">停止扫描</button>
+        <span id="scan-progress-text" style="font-size:11px;color:var(--text-secondary);"></span>
       </div>
       <div id="scan-table-wrap">
         <table>
@@ -98,6 +101,16 @@ class ScanQueueTab {
     btnScan.addEventListener("click", () => this.scan(folderInput.value));
     btnStart.addEventListener("click", () => this.startEncode());
     btnCancel.addEventListener("click", () => this.cancelEncode());
+
+    const btnStopScan = document.getElementById("btn-stop-scan")!;
+    btnStopScan.addEventListener("click", () => this.stopScan());
+
+    // Listen for scan progress
+    await listen<{ current: number; total: number; file: string }>("scan-progress", (event) => {
+      const p = event.payload;
+      const el = document.getElementById("scan-progress-text");
+      if (el) el.textContent = `扫描中 ${p.current}/${p.total}: ${p.file}`;
+    });
 
     // Load rules for summary display
     try {
@@ -147,40 +160,56 @@ class ScanQueueTab {
 
   static async scan(folderPath: string): Promise<void> {
     const btnScan = document.getElementById("btn-scan") as HTMLButtonElement;
+    const btnStop = document.getElementById("btn-stop-scan")!;
     btnScan.disabled = true;
     btnScan.textContent = "扫描中...";
+    btnStop.style.display = "inline-block";
+    this.scanning = true;
 
     try {
       this.videos = await invoke<VideoInfo[]>("scan_folder", { path: folderPath });
-
-      const rules = this.rules;
-      this.tasks.clear();
-
-      // Match rules to build tasks
-      for (const video of this.videos) {
-        const matched = this.matchRule(video, rules);
-        const task: EncodeTask = {
-          id: crypto.randomUUID(),
-          video,
-          rule: matched?.rule ?? { id: "", resolution: { P1080: null }, bitrate_threshold_kbps: 0, target_codec: "", target_bitrate_kbps: 0, preferred_encoder: { Auto: null }, maxrate_multiplier: 1.5, bufsize_multiplier: 2.0 },
-          encoder: matched?.encoder ?? "",
-          status: matched ? "Pending" : "Skipped(no matching rule or already encoded)",
-          progress: 0,
-          fps: 0,
-          eta_seconds: 0,
-        };
-        this.tasks.set(task.id, task);
-      }
-
-      this.renderTable();
-      this.updateSummary();
-      this.updateButtons();
+      // Even if cancelled mid-scan, we get partial results — show them
+      this.buildTasksFromVideos();
     } catch (e) {
-      alert(`scan failed: ${e}`);
+      alert(`扫描失败: ${e}`);
     } finally {
       btnScan.disabled = false;
       btnScan.textContent = "扫描";
+      btnStop.style.display = "none";
+      this.scanning = false;
+      const progEl = document.getElementById("scan-progress-text");
+      if (progEl) progEl.textContent = "";
     }
+  }
+
+  static async stopScan(): Promise<void> {
+    try {
+      await invoke("cancel_scan");
+    } catch (e) {
+      console.error("cancel scan failed:", e);
+    }
+  }
+
+  static buildTasksFromVideos(): void {
+    const rules = this.rules;
+    this.tasks.clear();
+    for (const video of this.videos) {
+      const matched = this.matchRule(video, rules);
+      const task: EncodeTask = {
+        id: crypto.randomUUID(),
+        video,
+        rule: matched?.rule ?? { id: "", resolution: { P1080: null }, bitrate_threshold_kbps: 0, target_codec: "", target_bitrate_kbps: 0, preferred_encoder: { Auto: null }, maxrate_multiplier: 1.5, bufsize_multiplier: 2.0 },
+        encoder: matched?.encoder ?? "",
+        status: matched ? "Pending" : "Skipped(no matching rule or already encoded)",
+        progress: 0,
+        fps: 0,
+        eta_seconds: 0,
+      };
+      this.tasks.set(task.id, task);
+    }
+    this.renderTable();
+    this.updateSummary();
+    this.updateButtons();
   }
 
   static matchRule(video: VideoInfo, rules: EncodeRule[]): { rule: EncodeRule; encoder: string } | null {

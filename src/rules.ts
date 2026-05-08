@@ -48,17 +48,29 @@ class RulesTab {
       this.rules = await invoke<EncodeRule[]>("load_rules");
     } catch (e) {
       console.error("load rules failed:", e);
+      alert(`加载规则失败: ${e}`);
     }
     this.renderTable();
 
-    document.getElementById("btn-add-rule")!.addEventListener("click", () => this.addRule());
-    document.getElementById("btn-delete-rules")!.addEventListener("click", () => this.deleteSelected());
-    document.getElementById("rules-select-all")!.addEventListener("change", (e) => {
-      const checked = (e.target as HTMLInputElement).checked;
-      document.querySelectorAll<HTMLInputElement>(".rule-checkbox").forEach((cb) => {
-        cb.checked = checked;
+    const btnAdd = document.getElementById("btn-add-rule");
+    if (btnAdd) {
+      btnAdd.addEventListener("click", () => this.addRule());
+    } else {
+      console.error("btn-add-rule not found in DOM");
+    }
+    const btnDel = document.getElementById("btn-delete-rules");
+    if (btnDel) {
+      btnDel.addEventListener("click", () => this.deleteSelected());
+    }
+    const selectAll = document.getElementById("rules-select-all");
+    if (selectAll) {
+      selectAll.addEventListener("change", (e) => {
+        const checked = (e.target as HTMLInputElement).checked;
+        document.querySelectorAll<HTMLInputElement>(".rule-checkbox").forEach((cb) => {
+          cb.checked = checked;
+        });
       });
-    });
+    }
   }
 
   static renderTable(): void {

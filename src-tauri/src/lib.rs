@@ -9,30 +9,45 @@ mod scheduler;
 
 use models::*;
 use scheduler::Scheduler;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{Emitter, State};
 use tokio::sync::mpsc;
 
 struct AppState {
     scheduler: Scheduler,
+    scan_cancelled: AtomicBool,
 }
 
 #[tauri::command]
 async fn scan_folder(
     path: String,
     ffmpeg_path: Option<String>,
-    _app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+    app: tauri::AppHandle,
 ) -> Result<Vec<VideoInfo>, String> {
     let ffmpeg = detector::find_ffmpeg_path(&ffmpeg_path)
         .ok_or("FFmpeg not found, please specify path in Settings")?;
+
+    state.scan_cancelled.store(false, Ordering::SeqCst);
 
     let files = scanner::scan_folder(std::path::Path::new(&path));
     if files.is_empty() {
         return Err("no video files found".into());
     }
 
+    let total = files.len();
     let mut videos = Vec::new();
-    for file in &files {
+    for (i, file) in files.iter().enumerate() {
+        if state.scan_cancelled.load(Ordering::SeqCst) {
+            // Return partial results when cancelled
+            break;
+        }
+        let _ = app.emit("scan-progress", &serde_json::json!({
+            "current": i + 1,
+            "total": total,
+            "file": file.file_name().unwrap_or_default().to_string_lossy(),
+        }));
         match scanner::probe_video(&ffmpeg, file) {
             Ok(info) => videos.push(info),
             Err(e) => {
@@ -41,6 +56,12 @@ async fn scan_folder(
         }
     }
     Ok(videos)
+}
+
+#[tauri::command]
+async fn cancel_scan(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.scan_cancelled.store(true, Ordering::SeqCst);
+    Ok(())
 }
 
 #[tauri::command]
@@ -211,9 +232,11 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .manage(Arc::new(AppState {
             scheduler: Scheduler::new(),
+            scan_cancelled: AtomicBool::new(false),
         }))
         .invoke_handler(tauri::generate_handler![
             scan_folder,
+            cancel_scan,
             load_rules,
             save_rules,
             load_settings,

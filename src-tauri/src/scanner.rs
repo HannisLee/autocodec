@@ -4,6 +4,18 @@ use std::process::Command;
 
 const VIDEO_EXTENSIONS: &[&str] = &["mkv", "mp4", "avi", "mov", "wmv", "flv", "webm", "m4v", "ts"];
 
+/// Derive ffprobe path from ffmpeg path by replacing the binary name
+pub fn ffprobe_path(ffmpeg_path: &str) -> String {
+    if ffmpeg_path.ends_with("ffmpeg") {
+        ffmpeg_path.replace("ffmpeg", "ffprobe")
+    } else if ffmpeg_path.ends_with("ffmpeg.exe") {
+        ffmpeg_path.replace("ffmpeg.exe", "ffprobe.exe")
+    } else {
+        // Unknown pattern, try replacing any "ffmpeg" substring
+        ffmpeg_path.replace("ffmpeg", "ffprobe")
+    }
+}
+
 pub fn scan_folder(folder: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     if let Ok(entries) = std::fs::read_dir(folder) {
@@ -24,7 +36,8 @@ pub fn scan_folder(folder: &Path) -> Vec<PathBuf> {
 
 pub fn probe_video(ffmpeg_path: &str, file: &Path) -> Result<VideoInfo, String> {
     let path_str = file.to_string_lossy().to_string();
-    let output = Command::new(ffmpeg_path)
+    let probe = ffprobe_path(ffmpeg_path);
+    let output = Command::new(&probe)
         .args([
             "-v", "quiet",
             "-print_format", "json",

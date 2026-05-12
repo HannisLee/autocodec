@@ -1,4 +1,4 @@
-use crate::models::{EncodeRule, EncoderChoice, ResolutionThreshold, VideoInfo};
+use crate::models::{EncodeRule, EncoderChoice, ResolutionThreshold};
 
 pub fn default_rules() -> Vec<EncodeRule> {
     vec![
@@ -23,28 +23,4 @@ pub fn default_rules() -> Vec<EncodeRule> {
             bufsize_multiplier: 2.0,
         },
     ]
-}
-
-pub fn match_rule(video: &VideoInfo, rules: &[EncodeRule]) -> Option<EncodeRule> {
-    for rule in rules {
-        if !rule.resolution.matches(video.width, video.height) {
-            continue;
-        }
-        if video.bitrate_kbps <= rule.bitrate_threshold_kbps {
-            continue;
-        }
-        let target_suffix = if rule.target_codec.eq_ignore_ascii_case("hevc") {
-            &["hevc", "h265", "x265"]
-        } else {
-            &["h264", "avc", "x264"]
-        };
-        let current_is_target = target_suffix.iter().any(|s| {
-            video.codec.to_lowercase().contains(s)
-        });
-        if current_is_target {
-            continue;
-        }
-        return Some(rule.clone());
-    }
-    None
 }

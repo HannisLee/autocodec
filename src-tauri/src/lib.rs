@@ -40,7 +40,6 @@ async fn scan_folder(
     let mut videos = Vec::new();
     for (i, file) in files.iter().enumerate() {
         if state.scan_cancelled.load(Ordering::SeqCst) {
-            // Return partial results when cancelled
             break;
         }
         let _ = app.emit("scan-progress", &serde_json::json!({
@@ -102,13 +101,11 @@ async fn start_encoding(
     let available_encoders = detector::detect_encoders(&settings.ffmpeg_path);
     let available_names: Vec<&str> = available_encoders.iter().map(|e| e.name.as_str()).collect();
 
-    // Resolve Auto encoder choices based on available encoders
     let tasks: Vec<EncodeTask> = tasks
         .into_iter()
         .map(|mut task| {
             if let EncoderChoice::Auto = &task.rule.preferred_encoder {
                 let target_is_hevc = task.rule.target_codec.eq_ignore_ascii_case("hevc");
-                // Iterate preferred order, pick first available that matches codec type
                 let mut resolved = None;
                 for pref in &settings.preferred_encoder_order {
                     if available_names.contains(&pref.as_str()) {
@@ -120,7 +117,6 @@ async fn start_encoding(
                         }
                     }
                 }
-                // Fallback
                 task.encoder = resolved.unwrap_or_else(|| {
                     if target_is_hevc {
                         "libx265".into()
@@ -136,7 +132,6 @@ async fn start_encoding(
     let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<ProgressPayload>();
     let (status_tx, mut status_rx) = mpsc::unbounded_channel::<(String, TaskStatus)>();
 
-    // Forward progress events to frontend
     let app_clone = app.clone();
     tokio::spawn(async move {
         while let Some(payload) = progress_rx.recv().await {
@@ -144,7 +139,6 @@ async fn start_encoding(
         }
     });
 
-    // Forward status events to frontend
     let app_clone2 = app.clone();
     tokio::spawn(async move {
         while let Some((task_id, status)) = status_rx.recv().await {
@@ -176,6 +170,55 @@ async fn start_encoding(
 async fn cancel_encoding(state: State<'_, Arc<AppState>>) -> Result<(), String> {
     state.scheduler.cancel_all().await;
     Ok(())
+}
+
+#[tauri::command]
+async fn stop_encoding(
+    state: State<'_, Arc<AppState>>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let settings = persistence::load_settings(&app);
+    state.scheduler.stop_and_cleanup(&settings.output_suffix).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn update_concurrency(
+    state: State<'_, Arc<AppState>>,
+    count: usize,
+) -> Result<(), String> {
+    state.scheduler.set_max_concurrent(count).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn update_resource_level(
+    state: State<'_, Arc<AppState>>,
+    app: tauri::AppHandle,
+    level: String,
+) -> Result<(), String> {
+    let mut settings = persistence::load_settings(&app);
+    settings.resource_level = level.clone();
+    persistence::save_settings(&app, &settings)?;
+    state.scheduler.set_resource_level(&level).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn pause_encoding(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.scheduler.pause().await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn resume_encoding(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.scheduler.resume().await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn is_paused(state: State<'_, Arc<AppState>>) -> Result<bool, String> {
+    Ok(state.scheduler.is_paused().await)
 }
 
 #[tauri::command]
@@ -244,6 +287,12 @@ pub fn run() {
             detect_encoders,
             start_encoding,
             cancel_encoding,
+            stop_encoding,
+            update_concurrency,
+            update_resource_level,
+            pause_encoding,
+            resume_encoding,
+            is_paused,
             retry_task,
         ])
         .run(tauri::generate_context!())

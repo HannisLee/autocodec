@@ -1,15 +1,17 @@
 use crate::ffmpeg_cmd::build_ffmpeg_args;
 use crate::models::{EncodeTask, ProgressPayload, Settings};
 use std::process::Stdio;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 
 pub async fn run_encode(
     task: &mut EncodeTask,
     settings: &Settings,
     ffmpeg_path: &str,
     progress_tx: mpsc::UnboundedSender<ProgressPayload>,
+    pids: Option<Arc<Mutex<Vec<u32>>>>,
 ) -> Result<(), String> {
     let args = build_ffmpeg_args(task, settings)?;
     let mut child = Command::new(ffmpeg_path)
@@ -19,6 +21,11 @@ pub async fn run_encode(
         .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("failed to start ffmpeg: {}", e))?;
+
+    let pid = child.id().unwrap_or(0);
+    if let Some(ref pids_list) = pids {
+        pids_list.lock().await.push(pid);
+    }
 
     let stdout = child.stdout.take().ok_or("cannot read stdout")?;
     let stderr = child.stderr.take().ok_or("cannot read stderr")?;
@@ -30,35 +37,47 @@ pub async fn run_encode(
     let task_id = task.id.clone();
 
     let progress_handle = tokio::spawn(async move {
+        let mut out_time_us: u64 = 0;
+        let mut fps: f64 = 0.0;
+        let mut speed: f64 = 0.0;
+
         while let Ok(Some(line)) = lines.next_line().await {
             let trimmed = line.trim();
             if trimmed.is_empty() {
                 continue;
             }
-            let out_time_us: u64 = parse_key(trimmed, "out_time_us=").unwrap_or(0);
-            let fps: f64 = parse_key(trimmed, "fps=").unwrap_or(0.0);
-            let speed: f64 = parse_speed(trimmed).unwrap_or(0.0);
 
-            let progress = if duration_us > 0 {
-                (out_time_us as f64 / duration_us as f64 * 100.0).min(100.0).max(0.0)
-            } else {
-                0.0
-            };
+            if let Some(v) = parse_key(trimmed, "out_time_us=") {
+                out_time_us = v;
+            }
+            if let Some(v) = parse_key::<f64>(trimmed, "fps=") {
+                fps = v;
+            }
+            if let Some(v) = parse_speed(trimmed) {
+                speed = v;
+            }
 
-            // speed= is a multiplier: 1.5x means 1.5 seconds of video per second of wall time
-            let eta_seconds = if speed > 0.0 && duration_us > 0 {
-                let remaining_us = duration_us.saturating_sub(out_time_us);
-                ((remaining_us as f64 / 1_000_000.0) / speed as f64) as u64
-            } else {
-                0
-            };
+            if trimmed.starts_with("progress=") {
+                let progress = if duration_us > 0 {
+                    (out_time_us as f64 / duration_us as f64 * 100.0).min(100.0)
+                } else {
+                    0.0
+                };
 
-            let _ = progress_tx.send(ProgressPayload {
-                task_id: task_id.clone(),
-                progress,
-                fps,
-                eta_seconds,
-            });
+                let eta_seconds = if speed > 0.0 && duration_us > 0 {
+                    let remaining_us = duration_us.saturating_sub(out_time_us);
+                    ((remaining_us as f64 / 1_000_000.0) / speed) as u64
+                } else {
+                    0
+                };
+
+                let _ = progress_tx.send(ProgressPayload {
+                    task_id: task_id.clone(),
+                    progress,
+                    fps,
+                    eta_seconds,
+                });
+            }
         }
     });
 
@@ -78,6 +97,12 @@ pub async fn run_encode(
     let status = child.wait().await.map_err(|e| format!("ffmpeg process error: {}", e))?;
     progress_handle.await.ok();
     let stderr_tail = stderr_handle.await.unwrap_or_default();
+
+    // Remove PID from active list
+    if let Some(ref pids_list) = pids {
+        let mut list = pids_list.lock().await;
+        list.retain(|&p| p != pid);
+    }
 
     if status.success() {
         task.status = crate::models::TaskStatus::Completed;

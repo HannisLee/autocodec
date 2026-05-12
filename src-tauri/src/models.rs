@@ -21,30 +21,6 @@ pub enum ResolutionThreshold {
     Custom { width: u32, height: u32 },
 }
 
-impl ResolutionThreshold {
-    pub fn label(&self) -> String {
-        match self {
-            ResolutionThreshold::P720 => "720p".into(),
-            ResolutionThreshold::P1080 => "1080p".into(),
-            ResolutionThreshold::P2160 => "2160p".into(),
-            ResolutionThreshold::Custom { width, height } => format!("{}x{}", width, height),
-        }
-    }
-
-    pub fn matches(&self, width: u32, height: u32) -> bool {
-        let (tw, th) = match self {
-            ResolutionThreshold::P720 => (1280, 720),
-            ResolutionThreshold::P1080 => (1920, 1080),
-            ResolutionThreshold::P2160 => (3840, 2160),
-            ResolutionThreshold::Custom {
-                width: w,
-                height: h,
-            } => (*w, *h),
-        };
-        width == tw && height == th
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EncoderChoice {
     Auto,
@@ -99,6 +75,9 @@ pub struct Settings {
     pub max_concurrent: usize,
     pub output_suffix: String,
     pub preferred_encoder_order: Vec<String>,
+    pub video_encode_template: String,
+    pub extra_args_template: String,
+    pub resource_level: String,
 }
 
 impl Default for Settings {
@@ -116,6 +95,9 @@ impl Default for Settings {
                 "hevc_amf".into(),
                 "libx265".into(),
             ],
+            video_encode_template: "-c:v {encoder} -b:v {bitrate}k -maxrate:v {maxrate}k -bufsize:v {bufsize}k".into(),
+            extra_args_template: "-c:a copy -map 0".into(),
+            resource_level: "medium".into(),
         }
     }
 }
